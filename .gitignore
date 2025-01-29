@@ -4,3 +4,4 @@
 *.pyc
 *.pth
 *.avi
+/output_videos
