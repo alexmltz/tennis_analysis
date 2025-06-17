@@ -5,3 +5,4 @@
 *.pth
 *.avi
 /output_videos
+/input_videos
