@@ -212,14 +212,17 @@ class MiniCourt():
                 # Get Player height in pixels
                 frame_index_min = max(0, frame_num-20)
                 frame_index_max = min(len(player_boxes), frame_num+50)
-                bboxes_heights_in_pixels = [get_height_of_bbox(player_boxes[i][player_id]) for i in range (frame_index_min,frame_index_max)]
-                max_player_height_in_pixels = max(bboxes_heights_in_pixels)
+                bboxes_heights_in_pixels = [get_height_of_bbox(player_boxes[i][player_id]) for i in range (frame_index_min,frame_index_max) if player_id in player_boxes[i]]
+                max_player_height_in_pixels = max(bboxes_heights_in_pixels) if bboxes_heights_in_pixels else 100  # Default height if no data
+
+                # Use default height if player_id not in predefined heights
+                player_height_meters = player_heights.get(player_id, constants.PLAYER_1_HEIGHT_METERS)
 
                 mini_court_player_position = self.get_mini_court_coordinates(foot_position,
                                                                             closest_key_point, 
                                                                             closest_key_point_index, 
                                                                             max_player_height_in_pixels,
-                                                                            player_heights[player_id]
+                                                                            player_height_meters
                                                                             )
                 
                 output_player_bboxes_dict[player_id] = mini_court_player_position
@@ -234,7 +237,7 @@ class MiniCourt():
                                                                             closest_key_point, 
                                                                             closest_key_point_index, 
                                                                             max_player_height_in_pixels,
-                                                                            player_heights[player_id]
+                                                                            player_height_meters
                                                                             )
                     output_ball_boxes.append({1:mini_court_player_position})
             output_player_boxes.append(output_player_bboxes_dict)
