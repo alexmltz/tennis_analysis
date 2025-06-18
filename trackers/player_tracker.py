@@ -10,12 +10,89 @@ class PlayerTracker:
         self.model = YOLO(model_path)
 
     def choose_and_filter_players(self, court_keypoints, player_detections):
-        player_detections_first_frame = player_detections[0]
-        chosen_player = self.choose_players(court_keypoints, player_detections_first_frame)
+        # Instead of only using the first frame, analyze multiple frames to find the best players
+        # This handles cases where actual tennis players appear/disappear while spectators remain static
+        
+        # Collect player statistics across all frames
+        player_stats = {}
+        
+        for frame_idx, player_dict in enumerate(player_detections[:10]):  # Analyze first 10 frames
+            frame_candidates = self.choose_players(court_keypoints, player_dict)
+            
+            for player_id in frame_candidates:
+                if player_id not in player_stats:
+                    player_stats[player_id] = {
+                        'appearances': 0,
+                        'total_score': 0,
+                        'positions': [],
+                        'first_appearance': frame_idx
+                    }
+                
+                player_stats[player_id]['appearances'] += 1
+                
+                # Calculate score for this player in this frame
+                if player_id in player_dict:
+                    bbox = player_dict[player_id]
+                    x1, y1, x2, y2 = bbox
+                    player_center = get_center_of_bbox(bbox)
+                    
+                    # Court-based scoring
+                    frame_width, frame_height = 1920, 1080
+                    center_x, center_y = player_center
+                    
+                    score = 0
+                    # Prefer players in court area
+                    if frame_width * 0.2 < center_x < frame_width * 0.8:
+                        score += 3
+                    if center_y > frame_height * 0.2:
+                        score += 2
+                    if (x2-x1) * (y2-y1) > 15000:  # Substantial size
+                        score += 2
+                    
+                    player_stats[player_id]['total_score'] += score
+                    player_stats[player_id]['positions'].append(player_center)
+        
+        # Calculate movement variance (tennis players move, spectators are static)
+        for player_id, stats in player_stats.items():
+            if len(stats['positions']) > 1:
+                positions = stats['positions']
+                # Calculate variance in x and y positions
+                x_positions = [pos[0] for pos in positions]
+                y_positions = [pos[1] for pos in positions]
+                
+                x_variance = sum((x - sum(x_positions)/len(x_positions))**2 for x in x_positions) / len(x_positions)
+                y_variance = sum((y - sum(y_positions)/len(y_positions))**2 for y in y_positions) / len(y_positions)
+                
+                # Bonus for movement (tennis players should move)
+                movement_bonus = min(5, (x_variance + y_variance) / 1000)
+                stats['total_score'] += movement_bonus
+        
+        # Select the best 2 players based on combined criteria
+        player_rankings = []
+        for player_id, stats in player_stats.items():
+            avg_score = stats['total_score'] / max(1, stats['appearances'])
+            # Prefer players who appear frequently and have good scores
+            final_score = avg_score * (stats['appearances'] / 10)  # Normalize by max possible appearances
+            
+            player_rankings.append((player_id, final_score, stats['appearances']))
+        
+        # Sort by final score (descending)
+        player_rankings.sort(key=lambda x: -x[1])
+        
+        # Take top 2 players
+        chosen_players = [player_rankings[i][0] for i in range(min(2, len(player_rankings)))]
+        
+        print(f"Player selection analysis:")
+        for player_id, score, appearances in player_rankings[:5]:  # Show top 5
+            print(f"  Player {player_id}: score={score:.2f}, appearances={appearances}/10")
+        print(f"  Chosen players: {chosen_players}")
+        
+        # Filter all frames based on chosen players
         filtered_player_detections = []
         for player_dict in player_detections:
-            filtered_player_dict = {track_id: bbox for track_id, bbox in player_dict.items() if track_id in chosen_player}
+            filtered_player_dict = {track_id: bbox for track_id, bbox in player_dict.items() if track_id in chosen_players}
             filtered_player_detections.append(filtered_player_dict)
+        
         return filtered_player_detections
 
     def choose_players(self, court_keypoints, player_dict):
@@ -24,84 +101,66 @@ class PlayerTracker:
         if len(player_dict) == 1:
             return list(player_dict.keys())
         if len(player_dict) == 2:
-            # Perfect case - exactly 2 players detected
             return list(player_dict.keys())
         
-        # More than 2 players - need to be more selective
-        distances = []
+        # For more than 2 players, we need intelligent selection
+        # Focus on players who are:
+        # 1. In the court area (not spectators)
+        # 2. Have reasonable size (actual players, not distant people)
+        # 3. Are positioned like tennis players (center court area)
+        
+        candidates = []
         for track_id, bbox in player_dict.items():
-            player_center = get_center_of_bbox(bbox)
-            player_foot = get_foot_position(bbox)  # Use foot position as it's more relevant for court proximity
-
-            # Calculate distance to court center and court lines
-            min_distance_to_keypoints = float('inf')
-            for i in range(0, len(court_keypoints), 2):
-                court_keypoint = (court_keypoints[i], court_keypoints[i+1])
-                distance = measure_distance(player_foot, court_keypoint)
-                if distance < min_distance_to_keypoints:
-                    min_distance_to_keypoints = distance
-            
-            # Also consider the player's position relative to the court bounds
             x1, y1, x2, y2 = bbox
+            player_center = get_center_of_bbox(bbox)
+            player_foot = get_foot_position(bbox)
+            
             bbox_width = x2 - x1
             bbox_height = y2 - y1
             bbox_area = bbox_width * bbox_height
             
-            # More aggressive scoring for tennis players
-            # Prefer players that are:
-            # 1. Very close to court keypoints (stricter)
-            # 2. Have optimal size for tennis players
-            # 3. Are positioned in the optimal court area
+            # Tennis court area analysis (assuming 1920x1080 frame)
+            frame_width, frame_height = 1920, 1080
             
-            # Size scoring - prefer medium-large players (actual tennis players)
-            size_penalty = 0
-            optimal_area_min = 15000
-            optimal_area_max = 60000
-            if bbox_area < optimal_area_min:
-                size_penalty = (optimal_area_min - bbox_area) / 1000  # Penalty for too small
-            elif bbox_area > optimal_area_max:
-                size_penalty = (bbox_area - optimal_area_max) / 2000  # Penalty for too large
-                
-            # Position penalty - prefer players in the court area
-            position_penalty = 0
-            frame_height = 1080
-            frame_width = 1920
+            # Tennis players should be:
+            # - In central 60% of frame width (not on extreme edges)
+            # - In lower 80% of frame height (on court, not in stands)
+            # - Have substantial size (not tiny distant spectators)
+            # - Not be static edge detections
             
-            # Prefer players in the central-lower area of the frame (tennis court area)
-            if player_center[1] < frame_height * 0.4:  # Top 40% of frame (likely spectators)
-                position_penalty = 3000
-            elif player_center[1] < frame_height * 0.5:  # Upper-middle area
-                position_penalty = 1000
-                
-            # Prefer players not too close to edges (likely spectators on sidelines)
-            if player_center[0] < frame_width * 0.1 or player_center[0] > frame_width * 0.9:
-                position_penalty += 1500
-                
-            # Court proximity penalty - must be reasonably close to court
-            court_penalty = 0
-            if min_distance_to_keypoints > 200:  # Stricter than before (was 300)
-                court_penalty = min_distance_to_keypoints * 2
-                
-            total_score = min_distance_to_keypoints + size_penalty + position_penalty + court_penalty
-            distances.append((track_id, total_score, min_distance_to_keypoints, bbox_area))
+            center_x, center_y = player_center
+            
+            # Court area constraints
+            is_in_court_width = (frame_width * 0.2 < center_x < frame_width * 0.8)  # Central 60%
+            is_in_court_height = (center_y > frame_height * 0.2)  # Lower 80%
+            is_substantial_size = (bbox_area > 15000)  # Larger than small spectators
+            is_not_edge = (x1 > 50 and x2 < frame_width - 50)  # Not touching frame edges
+            is_reasonable_aspect = (1.0 < bbox_height/bbox_width < 4.0)  # Human proportions
+            
+            # Calculate distance to court center (approximate tennis court center)
+            court_center_x, court_center_y = frame_width * 0.5, frame_height * 0.6
+            distance_to_court_center = measure_distance(player_center, (court_center_x, court_center_y))
+            
+            # Score each candidate
+            score = 0
+            if is_in_court_width: score += 3
+            if is_in_court_height: score += 2  
+            if is_substantial_size: score += 2
+            if is_not_edge: score += 1
+            if is_reasonable_aspect: score += 1
+            
+            # Bonus for being closer to court center
+            score += max(0, 3 - distance_to_court_center / 200)
+            
+            candidates.append((track_id, bbox, score, distance_to_court_center))
         
-        # Sort by total score (lower is better)
-        distances.sort(key=lambda x: x[1])
+        # Sort by score (descending) then by distance to court center (ascending)
+        candidates.sort(key=lambda x: (-x[2], x[3]))
         
-        # Only choose players if they meet strict criteria
-        chosen_players = []
-        for i, (track_id, total_score, court_distance, area) in enumerate(distances):
-            if i >= 2:  # Only take top 2
-                break
-            # Stricter acceptance criteria
-            if (court_distance < 200 and  # Must be very close to court
-                total_score < 1000):      # Must have low total penalty score
-                chosen_players.append(track_id)
+        # Take top 2 candidates
+        chosen_players = [candidates[i][0] for i in range(min(2, len(candidates)))]
         
-        # If we found more than 2 good candidates, prefer the best 2
-        # If we found fewer than 2 good candidates, return what we have
-        return chosen_players[:2]
-
+        return chosen_players
 
     def detect_frames(self,frames, read_from_stub=False, stub_path=None):
         player_detections = []
@@ -122,7 +181,8 @@ class PlayerTracker:
         return player_detections
 
     def detect_frame(self,frame):
-        results = self.model.track(frame, persist=True)[0]
+        # Use more persistent tracking parameters
+        results = self.model.track(frame, persist=True, tracker="bytetrack.yaml")[0]
         id_name_dict = results.names
 
         player_dict = {}
@@ -139,36 +199,36 @@ class PlayerTracker:
             object_cls_name = id_name_dict[object_cls_id]
             confidence = box.conf.tolist()[0]
             
-            # Only keep person detections with strict criteria for tennis courts
+            # Balanced filtering for tennis players - less aggressive to catch more players
             if object_cls_name == "person":
                 x1, y1, x2, y2 = result
                 bbox_width = x2 - x1
                 bbox_height = y2 - y1
                 bbox_area = bbox_width * bbox_height
                 
-                # More aggressive filtering for tennis players:
-                # 1. Higher confidence threshold
-                # 2. Better size constraints (tennis players should be prominent)
-                # 3. Better aspect ratio (standing people)
-                # 4. Position filtering (lower part of frame = on court)
-                min_confidence = 0.7  # Increased from 0.5
-                min_area = 8000  # Increased from 2000 (larger players only)
-                max_area = 120000  # Decreased from 200000 (filter very large detections)
-                min_height = 80  # Increased from 50
-                max_width = 200  # Add max width constraint
+                # More balanced filtering to catch both players:
+                # 1. Lower confidence threshold to catch partially occluded players
+                # 2. Wider size range to accommodate different distances
+                # 3. Better aspect ratio range
+                # 4. Less strict position filtering
+                min_confidence = 0.5  # Reduced from 0.7 to catch more players
+                min_area = 5000  # Reduced from 8000 to catch smaller/distant players
+                max_area = 150000  # Increased from 120000 for closer players
+                min_height = 60  # Reduced from 80
+                max_width = 250  # Increased from 200
                 aspect_ratio = bbox_height / bbox_width if bbox_width > 0 else 0
                 
-                # Position filtering - tennis players should be in lower 70% of frame
-                frame_height = 1080  # Assuming HD video
+                # Less strict position filtering - allow players in more areas
+                frame_height = 1080
                 center_y = (y1 + y2) / 2
                 
                 if (confidence >= min_confidence and 
                     min_area <= bbox_area <= max_area and 
                     bbox_height >= min_height and
                     bbox_width <= max_width and
-                    aspect_ratio >= 1.2 and  # People should be taller (increased from 0.8)
-                    aspect_ratio <= 4.0 and  # But not too tall (avoid weird detections)
-                    center_y >= frame_height * 0.3):  # Only lower 70% of frame
+                    aspect_ratio >= 1.0 and  # Reduced from 1.2 to catch more orientations
+                    aspect_ratio <= 5.0 and  # Increased from 4.0
+                    center_y >= frame_height * 0.2):  # Allow top 20% (was 30%) for players near net
                     player_dict[track_id] = result
         
         return player_dict

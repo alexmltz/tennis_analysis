@@ -72,46 +72,6 @@ def main():
                                                          )
         print("Player detection completed")
         
-        # Calculate player detection statistics
-        print("\n=== PLAYER DETECTION STATISTICS ===")
-        total_frames = len(player_detections)
-        frames_with_0_players = 0
-        frames_with_1_player = 0
-        frames_with_2_players = 0
-        frames_with_3plus_players = 0
-        
-        for frame_idx, player_dict in enumerate(player_detections):
-            num_players = len(player_dict)
-            if num_players == 0:
-                frames_with_0_players += 1
-            elif num_players == 1:
-                frames_with_1_player += 1
-            elif num_players == 2:
-                frames_with_2_players += 1
-            else:
-                frames_with_3plus_players += 1
-                
-            # Show some examples of problematic frames
-            if frame_idx < 10 or (frame_idx % 20 == 0 and frame_idx < 60):
-                original_frame_num = sampled_frame_numbers[frame_idx] if frame_idx < len(sampled_frame_numbers) else frame_idx
-                print(f"  Frame {original_frame_num}: {num_players} players detected - {list(player_dict.keys())}")
-        
-        print(f"\nDetection Quality Summary:")
-        print(f"  Total frames analyzed: {total_frames}")
-        print(f"  Frames with 0 players: {frames_with_0_players} ({frames_with_0_players/total_frames*100:.1f}%)")
-        print(f"  Frames with 1 player:  {frames_with_1_player} ({frames_with_1_player/total_frames*100:.1f}%)")
-        print(f"  Frames with 2 players:  {frames_with_2_players} ({frames_with_2_players/total_frames*100:.1f}%) ← TARGET")
-        print(f"  Frames with 3+ players: {frames_with_3plus_players} ({frames_with_3plus_players/total_frames*100:.1f}%)")
-        print(f"\n  KPI: Both players detected in {frames_with_2_players}/{total_frames} frames ({frames_with_2_players/total_frames*100:.1f}%)")
-        
-        if frames_with_2_players < total_frames * 0.1:  # Less than 10% is very poor
-            print("  ❌ POOR: Less than 10% of frames have both players detected")
-        elif frames_with_2_players < total_frames * 0.3:  # Less than 30% is below average
-            print("  ⚠️  BELOW AVERAGE: Less than 30% of frames have both players detected")
-        else:
-            print("  ✅ GOOD: Decent player detection rate")
-        print("="*50)
-        
         print("Detecting ball...")
         ball_detections = ball_tracker.detect_frames(video_frames,
                                                          read_from_stub=False,
@@ -136,6 +96,49 @@ def main():
         player_detections = player_tracker.choose_and_filter_players(court_keypoints, player_detections)
         print("Player filtering completed")
 
+        # Calculate player detection statistics AFTER filtering
+        print("\n=== FILTERED PLAYER DETECTION STATISTICS ===")
+        total_frames = len(player_detections)
+        frames_with_0_players = 0
+        frames_with_1_player = 0
+        frames_with_2_players = 0
+        frames_with_3plus_players = 0
+        
+        for frame_idx, player_dict in enumerate(player_detections):
+            num_players = len(player_dict)
+            if num_players == 0:
+                frames_with_0_players += 1
+            elif num_players == 1:
+                frames_with_1_player += 1
+            elif num_players == 2:
+                frames_with_2_players += 1
+            else:
+                frames_with_3plus_players += 1
+                
+            # Show detailed examples of filtered player detection patterns
+            if frame_idx < 15 or (frame_idx % 10 == 0):
+                original_frame_num = sampled_frame_numbers[frame_idx] if frame_idx < len(sampled_frame_numbers) else frame_idx
+                player_ids = list(player_dict.keys())
+                print(f"  Frame {original_frame_num}: {num_players} players detected - IDs: {player_ids}")
+        
+        print(f"\nFILTERED Detection Quality Summary:")
+        print(f"  Total frames analyzed: {total_frames}")
+        print(f"  Frames with 0 players: {frames_with_0_players} ({frames_with_0_players/total_frames*100:.1f}%)")
+        print(f"  Frames with 1 player:  {frames_with_1_player} ({frames_with_1_player/total_frames*100:.1f}%)")
+        print(f"  Frames with 2 players:  {frames_with_2_players} ({frames_with_2_players/total_frames*100:.1f}%) ← TARGET")
+        print(f"  Frames with 3+ players: {frames_with_3plus_players} ({frames_with_3plus_players/total_frames*100:.1f}%)")
+        print(f"\n  🎯 FINAL KPI: Both players detected in {frames_with_2_players}/{total_frames} frames ({frames_with_2_players/total_frames*100:.1f}%)")
+        
+        if frames_with_2_players < total_frames * 0.1:  # Less than 10% is very poor
+            print("  ❌ POOR: Less than 10% of frames have both players detected")
+        elif frames_with_2_players < total_frames * 0.3:  # Less than 30% is below average
+            print("  ⚠️  BELOW AVERAGE: Less than 30% of frames have both players detected")
+        elif frames_with_2_players < total_frames * 0.5:  # Less than 50% is average
+            print("  ✅ GOOD: Decent player detection rate")
+        else:
+            print("  🏆 EXCELLENT: High player detection rate!")
+        print("="*50)
+        
         # MiniCourt
         print("Initializing mini court...")
         mini_court = MiniCourt(video_frames[0]) 
