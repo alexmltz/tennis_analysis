@@ -40,7 +40,7 @@ def main():
         print(f"Video info: {video_info}")
         
         # Configuration: Set max_frames to None to process full video (requires more memory)
-        max_frames = 10000  # Process only first 1000 frames for testing
+        max_frames = 500  # Process more frames to get ball shots and better analysis
         # max_frames = None  # Uncomment this line to process full video
         
         if max_frames:
@@ -60,14 +60,14 @@ def main():
 
         print("Detecting players...")
         player_detections = player_tracker.detect_frames(video_frames,
-                                                         read_from_stub=True,
+                                                         read_from_stub=False,
                                                          stub_path="tracker_stubs/player_detections.pkl"
                                                          )
         print("Player detection completed")
         
         print("Detecting ball...")
         ball_detections = ball_tracker.detect_frames(video_frames,
-                                                         read_from_stub=True,
+                                                         read_from_stub=False,
                                                          stub_path="tracker_stubs/ball_detections.pkl"
                                                          )
         print("Ball detection completed")

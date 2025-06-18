@@ -31,10 +31,17 @@ class PlayerTracker:
                     min_distance = distance
             distances.append((track_id, min_distance))
         
-        # sorrt the distances in ascending order
+        # Sort the distances in ascending order
         distances.sort(key = lambda x: x[1])
-        # Choose the first 2 tracks
-        chosen_players = [distances[0][0], distances[1][0]]
+        
+        # Choose players based on how many are available
+        chosen_players = []
+        if len(distances) >= 2:
+            chosen_players = [distances[0][0], distances[1][0]]
+        elif len(distances) == 1:
+            chosen_players = [distances[0][0]]
+        # If no players detected, return empty list
+        
         return chosen_players
 
 
@@ -62,7 +69,13 @@ class PlayerTracker:
 
         player_dict = {}
         for box in results.boxes:
-            track_id = int(box.id.tolist()[0])
+            # Check if tracking ID is available
+            if box.id is not None:
+                track_id = int(box.id.tolist()[0])
+            else:
+                # Use a fallback ID if tracking fails
+                track_id = hash(tuple(box.xyxy.tolist()[0])) % 10000  # Generate pseudo-ID from bbox coordinates
+                
             result = box.xyxy.tolist()[0]
             object_cls_id = box.cls.tolist()[0]
             object_cls_name = id_name_dict[object_cls_id]
