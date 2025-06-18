@@ -16,6 +16,7 @@ increase max_frames or set to None (but may require more memory).
 from utils import (read_video, 
                    save_video,
                    read_video_limited,
+                   read_video_sampled,
                    get_video_info,
                    measure_distance,
                    draw_player_stats,
@@ -39,18 +40,24 @@ def main():
         video_info = get_video_info(input_video_path)
         print(f"Video info: {video_info}")
         
-        # Configuration: Set max_frames to None to process full video (requires more memory)
-        max_frames = 500  # Process more frames to get ball shots and better analysis
-        # max_frames = None  # Uncomment this line to process full video
+        # Configuration: Extract frames from 25-35 seconds for best tennis action
+        fps = video_info['fps']  # 25 fps
+        start_time_seconds = 25
+        end_time_seconds = 35
+        start_frame = int(start_time_seconds * fps)  # Frame 625
+        end_frame = int(end_time_seconds * fps)      # Frame 875
+        frame_step = 5  # Process every 5th frame for detailed analysis
         
-        if max_frames:
-            print(f"Reading first {max_frames} frames from: {input_video_path}")
-            video_frames = read_video_limited(input_video_path, max_frames=max_frames)
-        else:
-            print(f"Reading all frames from: {input_video_path}")
-            video_frames = read_video(input_video_path)
-            
-        print(f"Successfully read {len(video_frames)} frames")
+        print(f"Extracting frames from {start_time_seconds}s to {end_time_seconds}s")
+        print(f"Frame range: {start_frame} to {end_frame} (every {frame_step}th frame)")
+        
+        video_frames = read_video_sampled(input_video_path, frame_step=frame_step, 
+                                         max_frames=None, start_frame=start_frame, end_frame=end_frame)
+        print(f"Successfully read {len(video_frames)} frames from the action sequence")
+        
+        # Calculate which original frame numbers we're processing
+        sampled_frame_numbers = list(range(start_frame, min(end_frame, start_frame + len(video_frames) * frame_step), frame_step))
+        print(f"Processing frame numbers: {sampled_frame_numbers[:5]}...{sampled_frame_numbers[-5:]} (showing first 5 and last 5)")
 
         # Detect Players and Ball
         print("Initializing trackers...")
@@ -64,6 +71,46 @@ def main():
                                                          stub_path="tracker_stubs/player_detections.pkl"
                                                          )
         print("Player detection completed")
+        
+        # Calculate player detection statistics
+        print("\n=== PLAYER DETECTION STATISTICS ===")
+        total_frames = len(player_detections)
+        frames_with_0_players = 0
+        frames_with_1_player = 0
+        frames_with_2_players = 0
+        frames_with_3plus_players = 0
+        
+        for frame_idx, player_dict in enumerate(player_detections):
+            num_players = len(player_dict)
+            if num_players == 0:
+                frames_with_0_players += 1
+            elif num_players == 1:
+                frames_with_1_player += 1
+            elif num_players == 2:
+                frames_with_2_players += 1
+            else:
+                frames_with_3plus_players += 1
+                
+            # Show some examples of problematic frames
+            if frame_idx < 10 or (frame_idx % 20 == 0 and frame_idx < 60):
+                original_frame_num = sampled_frame_numbers[frame_idx] if frame_idx < len(sampled_frame_numbers) else frame_idx
+                print(f"  Frame {original_frame_num}: {num_players} players detected - {list(player_dict.keys())}")
+        
+        print(f"\nDetection Quality Summary:")
+        print(f"  Total frames analyzed: {total_frames}")
+        print(f"  Frames with 0 players: {frames_with_0_players} ({frames_with_0_players/total_frames*100:.1f}%)")
+        print(f"  Frames with 1 player:  {frames_with_1_player} ({frames_with_1_player/total_frames*100:.1f}%)")
+        print(f"  Frames with 2 players:  {frames_with_2_players} ({frames_with_2_players/total_frames*100:.1f}%) ← TARGET")
+        print(f"  Frames with 3+ players: {frames_with_3plus_players} ({frames_with_3plus_players/total_frames*100:.1f}%)")
+        print(f"\n  KPI: Both players detected in {frames_with_2_players}/{total_frames} frames ({frames_with_2_players/total_frames*100:.1f}%)")
+        
+        if frames_with_2_players < total_frames * 0.1:  # Less than 10% is very poor
+            print("  ❌ POOR: Less than 10% of frames have both players detected")
+        elif frames_with_2_players < total_frames * 0.3:  # Less than 30% is below average
+            print("  ⚠️  BELOW AVERAGE: Less than 30% of frames have both players detected")
+        else:
+            print("  ✅ GOOD: Decent player detection rate")
+        print("="*50)
         
         print("Detecting ball...")
         ball_detections = ball_tracker.detect_frames(video_frames,

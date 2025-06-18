@@ -46,8 +46,60 @@ def read_video_limited(video_path, max_frames=None, start_frame=0):
     cap.release()
     return frames
 
+def read_video_sampled(video_path, frame_step=10, max_frames=None, start_frame=0, end_frame=None):
+    """
+    Read video frames with sampling
+    
+    Args:
+        video_path: Path to video file
+        frame_step: Step size for sampling (e.g., 10 = every 10th frame)
+        max_frames: Maximum number of frames to read (None for all)
+        start_frame: Starting frame number (default: 0)
+        end_frame: Ending frame number (None for end of video)
+    
+    Returns:
+        List of sampled frames
+    """
+    cap = cv2.VideoCapture(video_path)
+    
+    # Get total frame count if end_frame is not specified
+    if end_frame is None:
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        end_frame = total_frames
+    
+    frames = []
+    current_frame = start_frame
+    
+    while current_frame < end_frame:
+        # Set frame position
+        cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame)
+        ret, frame = cap.read()
+        
+        if not ret:
+            break
+            
+        frames.append(frame)
+        
+        # Check if we've reached max_frames limit
+        if max_frames is not None and len(frames) >= max_frames:
+            break
+            
+        # Move to next sampled frame
+        current_frame += frame_step
+    
+    cap.release()
+    return frames
+
 def get_video_info(video_path):
-    """Get basic video information"""
+    """
+    Get basic information about a video file
+    
+    Args:
+        video_path: Path to video file
+    
+    Returns:
+        Dictionary with video information
+    """
     cap = cv2.VideoCapture(video_path)
     
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
