@@ -10,13 +10,13 @@ class PlayerTracker:
         self.model = YOLO(model_path)
 
     def choose_and_filter_players(self, court_keypoints, player_detections):
-        # Instead of only using the first frame, analyze multiple frames to find the best players
-        # This handles cases where actual tennis players appear/disappear while spectators remain static
+        # Step 1: Find the best initial players from first few frames
+        print("=== DYNAMIC PLAYER TRACKING ===")
         
-        # Collect player statistics across all frames
+        # Collect player statistics across first 10 frames for initial selection
         player_stats = {}
         
-        for frame_idx, player_dict in enumerate(player_detections[:10]):  # Analyze first 10 frames
+        for frame_idx, player_dict in enumerate(player_detections[:10]):
             frame_candidates = self.choose_players(court_keypoints, player_dict)
             
             for player_id in frame_candidates:
@@ -30,7 +30,6 @@ class PlayerTracker:
                 
                 player_stats[player_id]['appearances'] += 1
                 
-                # Calculate score for this player in this frame
                 if player_id in player_dict:
                     bbox = player_dict[player_id]
                     x1, y1, x2, y2 = bbox
@@ -41,12 +40,11 @@ class PlayerTracker:
                     center_x, center_y = player_center
                     
                     score = 0
-                    # Prefer players in court area
                     if frame_width * 0.2 < center_x < frame_width * 0.8:
                         score += 3
                     if center_y > frame_height * 0.2:
                         score += 2
-                    if (x2-x1) * (y2-y1) > 15000:  # Substantial size
+                    if (x2-x1) * (y2-y1) > 15000:
                         score += 2
                     
                     player_stats[player_id]['total_score'] += score
@@ -56,43 +54,102 @@ class PlayerTracker:
         for player_id, stats in player_stats.items():
             if len(stats['positions']) > 1:
                 positions = stats['positions']
-                # Calculate variance in x and y positions
                 x_positions = [pos[0] for pos in positions]
                 y_positions = [pos[1] for pos in positions]
                 
                 x_variance = sum((x - sum(x_positions)/len(x_positions))**2 for x in x_positions) / len(x_positions)
                 y_variance = sum((y - sum(y_positions)/len(y_positions))**2 for y in y_positions) / len(y_positions)
                 
-                # Bonus for movement (tennis players should move)
                 movement_bonus = min(5, (x_variance + y_variance) / 1000)
                 stats['total_score'] += movement_bonus
         
-        # Select the best 2 players based on combined criteria
+        # Select initial 2 best players
         player_rankings = []
         for player_id, stats in player_stats.items():
             avg_score = stats['total_score'] / max(1, stats['appearances'])
-            # Prefer players who appear frequently and have good scores
-            final_score = avg_score * (stats['appearances'] / 10)  # Normalize by max possible appearances
-            
+            final_score = avg_score * (stats['appearances'] / 10)
             player_rankings.append((player_id, final_score, stats['appearances']))
         
-        # Sort by final score (descending)
         player_rankings.sort(key=lambda x: -x[1])
+        initial_chosen_players = [player_rankings[i][0] for i in range(min(2, len(player_rankings)))]
         
-        # Take top 2 players
-        chosen_players = [player_rankings[i][0] for i in range(min(2, len(player_rankings)))]
-        
-        print(f"Player selection analysis:")
-        for player_id, score, appearances in player_rankings[:5]:  # Show top 5
+        print(f"Initial player selection:")
+        for player_id, score, appearances in player_rankings[:5]:
             print(f"  Player {player_id}: score={score:.2f}, appearances={appearances}/10")
-        print(f"  Chosen players: {chosen_players}")
+        print(f"  Initial chosen players: {initial_chosen_players}")
         
-        # Filter all frames based on chosen players
+        # Step 2: Dynamic tracking with ID re-mapping
+        # Track last known positions of our chosen players
+        if len(initial_chosen_players) >= 2:
+            player_1_id, player_2_id = initial_chosen_players[0], initial_chosen_players[1]
+        elif len(initial_chosen_players) == 1:
+            player_1_id, player_2_id = initial_chosen_players[0], None
+        else:
+            player_1_id, player_2_id = None, None
+        
+        # Track positions and map new IDs to original players
+        player_1_last_pos = None
+        player_2_last_pos = None
+        
         filtered_player_detections = []
-        for player_dict in player_detections:
-            filtered_player_dict = {track_id: bbox for track_id, bbox in player_dict.items() if track_id in chosen_players}
-            filtered_player_detections.append(filtered_player_dict)
         
+        for frame_idx, player_dict in enumerate(player_detections):
+            current_frame_players = {}
+            
+            # Try to find our tracked players by ID first
+            if player_1_id and player_1_id in player_dict:
+                current_frame_players[player_1_id] = player_dict[player_1_id]
+                player_1_last_pos = get_center_of_bbox(player_dict[player_1_id])
+            
+            if player_2_id and player_2_id in player_dict:
+                current_frame_players[player_2_id] = player_dict[player_2_id]
+                player_2_last_pos = get_center_of_bbox(player_dict[player_2_id])
+            
+            # If we're missing players, try to find them by position similarity
+            missing_players = []
+            if player_1_id and player_1_id not in player_dict:
+                missing_players.append(('player_1', player_1_last_pos))
+            if player_2_id and player_2_id not in player_dict:
+                missing_players.append(('player_2', player_2_last_pos))
+            
+            # Find unaccounted players in current frame
+            unaccounted_players = {pid: bbox for pid, bbox in player_dict.items() 
+                                 if pid not in current_frame_players}
+            
+            # Match missing players to unaccounted players by proximity
+            for missing_player, last_pos in missing_players:
+                if last_pos is None or not unaccounted_players:
+                    continue
+                
+                best_match_id = None
+                best_distance = float('inf')
+                
+                for pid, bbox in unaccounted_players.items():
+                    current_pos = get_center_of_bbox(bbox)
+                    distance = measure_distance(last_pos, current_pos)
+                    
+                    # Only consider matches within reasonable distance (players don't teleport)
+                    if distance < 300 and distance < best_distance:  # 300 pixels max movement
+                        best_distance = distance
+                        best_match_id = pid
+                
+                # Re-map the player ID
+                if best_match_id:
+                    if missing_player == 'player_1':
+                        current_frame_players[player_1_id] = unaccounted_players[best_match_id]
+                        player_1_last_pos = get_center_of_bbox(unaccounted_players[best_match_id])
+                        print(f"  Frame {frame_idx}: Re-mapped Player {best_match_id} -> Player {player_1_id} (distance: {best_distance:.1f})")
+                    else:  # player_2
+                        current_frame_players[player_2_id] = unaccounted_players[best_match_id]
+                        player_2_last_pos = get_center_of_bbox(unaccounted_players[best_match_id])
+                        print(f"  Frame {frame_idx}: Re-mapped Player {best_match_id} -> Player {player_2_id} (distance: {best_distance:.1f})")
+                    
+                    # Remove from unaccounted
+                    del unaccounted_players[best_match_id]
+            
+            filtered_player_detections.append(current_frame_players)
+        
+        print(f"=== DYNAMIC TRACKING COMPLETE ===")
         return filtered_player_detections
 
     def choose_players(self, court_keypoints, player_dict):
