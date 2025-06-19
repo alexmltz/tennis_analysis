@@ -3,6 +3,12 @@
 
 let them guess
 
+---
+
+I FOUND ... last forehands from Fonseca etc.
+
+---
+
 🎯 The Solution:
 Based on your ground truth annotations, I now need to implement a Ground Truth Guided Tracking approach that:
 Uses court position validation - Player 1 bottom, Player 2 top
